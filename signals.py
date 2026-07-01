@@ -1,5 +1,21 @@
+import json
+import os
 import re
 import statistics
+
+from groq import Groq
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+_groq_client = None
+
+
+def _client():
+    global _groq_client
+    if _groq_client is None:
+        _groq_client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    return _groq_client
+
 
 DISCOURSE_MARKERS = [
     "moreover", "furthermore", "additionally", "overall",
@@ -58,4 +74,70 @@ def run_stylometric_signal(text):
         "discourse_marker_density": round(discourse_marker_density, 4),
         "discourse_marker_score": round(discourse_marker_score, 4),
         "stylometric_score": round(stylometric_score, 4),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Groq LLM signals
+# ---------------------------------------------------------------------------
+
+_SEMANTIC_PROMPT = """You are a text-analysis component in an attribution-transparency system.
+
+Rate the SEMANTIC GENERICNESS of the text on an integer scale from 0 to 5:
+0 = highly specific, situated, and human-like (concrete lived detail, particular
+    names/places/events, context-dependent claims that could not be swapped into
+    another piece).
+5 = highly generic, interchangeable, and AI-like (broad claims, filler examples,
+    content that could satisfy many different prompts).
+
+Judge only genericness of MEANING, not grammar, tone, or formality.
+
+Respond with ONLY a JSON object in this exact shape:
+{"score": <integer 0-5>, "rationale": "<one concise sentence>"}"""
+
+_PRAGMATIC_PROMPT = """You are a text-analysis component in an attribution-transparency system.
+
+Rate the PRAGMATIC GENERICNESS of the text on an integer scale from 0 to 5:
+0 = strong human communicative intent (clearly directed from a real writer to a
+    real audience, with a specific purpose, stake, or reason for being written).
+5 = weak or generic communicative intent, more AI-like (a generalized answer
+    produced to satisfy a prompt, with no discernible audience, stake, or occasion).
+
+Judge only communicative intent, not grammar, tone, or formality.
+
+Respond with ONLY a JSON object in this exact shape:
+{"score": <integer 0-5>, "rationale": "<one concise sentence>"}"""
+
+
+def _run_groq_genericness(text, system_prompt):
+    """Call Groq and return (genericness_score_0_1, rationale). Raw score is 0-5."""
+    resp = _client().chat.completions.create(
+        model=GROQ_MODEL,
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": text},
+        ],
+    )
+    data = json.loads(resp.choices[0].message.content)
+    raw = float(data.get("score", 0))
+    raw = max(0.0, min(5.0, raw))
+    rationale = str(data.get("rationale", "")).strip()
+    return round(raw / 5.0, 4), rationale
+
+
+def run_semantic_signal(text):
+    score, rationale = _run_groq_genericness(text, _SEMANTIC_PROMPT)
+    return {
+        "semantic_genericness_score": score,
+        "semantic_rationale": rationale,
+    }
+
+
+def run_pragmatic_signal(text):
+    score, rationale = _run_groq_genericness(text, _PRAGMATIC_PROMPT)
+    return {
+        "pragmatic_genericness_score": score,
+        "pragmatic_rationale": rationale,
     }

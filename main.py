@@ -8,7 +8,12 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 from audit_log import append_entry, get_recent_entries
-from signals import run_stylometric_signal
+from signals import (
+    run_stylometric_signal,
+    run_semantic_signal,
+    run_pragmatic_signal,
+)
+from scoring import combine_scores, confidence_score, attribution_result
 
 load_dotenv()
 
@@ -42,14 +47,6 @@ _LABELS = {
 }
 
 
-def _attribution_from_score(score):
-    if score <= 0.30:
-        return "likely_human"
-    if score >= 0.75:
-        return "likely_ai"
-    return "uncertain"
-
-
 @app.route("/submit", methods=["POST"])
 @limiter.limit("10 per minute")
 def submit():
@@ -69,21 +66,44 @@ def submit():
 
     # Signal 1: Stylometric heuristics
     stylo = run_stylometric_signal(text)
-    stylometric_score = stylo["stylometric_score"]
+    # Signal 2: Groq semantic genericness
+    semantic = run_semantic_signal(text)
+    # Signal 3: Groq pragmatic genericness
+    pragmatic = run_pragmatic_signal(text)
 
-    # M3: attribution driven by Signal 1 only; confidence and full label added in M4
-    attribution_result = _attribution_from_score(stylometric_score)
-    confidence_score = 0.0          # placeholder until all signals are combined
-    transparency_label = _LABELS[attribution_result]
+    semantic_genericness_score = semantic["semantic_genericness_score"]
+    pragmatic_genericness_score = pragmatic["pragmatic_genericness_score"]
+
+    # Combine all five feature scores into one AI-likeness score
+    combined_ai_score = combine_scores(
+        stylo["sentence_regularity_score"],
+        stylo["em_dash_score"],
+        stylo["discourse_marker_score"],
+        semantic_genericness_score,
+        pragmatic_genericness_score,
+    )
+    confidence = confidence_score(combined_ai_score)
+    attribution = attribution_result(combined_ai_score)
+    transparency_label = _LABELS[attribution]
+
+    score_breakdown = {
+        "sentence_regularity_score": stylo["sentence_regularity_score"],
+        "em_dash_score": stylo["em_dash_score"],
+        "discourse_marker_score": stylo["discourse_marker_score"],
+        "semantic_genericness_score": semantic_genericness_score,
+        "pragmatic_genericness_score": pragmatic_genericness_score,
+        "combined_ai_score": combined_ai_score,
+    }
 
     submissions[submission_id] = {
         "submission_id": submission_id,
         "creator_id": creator_id,
         "text_hash": text_hash,
-        "attribution_result": attribution_result,
-        "confidence_score": confidence_score,
+        "attribution_result": attribution,
+        "confidence_score": confidence,
+        "combined_ai_score": combined_ai_score,
         "transparency_label": transparency_label,
-        "stylometric_score": stylometric_score,
+        "score_breakdown": score_breakdown,
         "status": "classified",
         "created_at": created_at,
     }
@@ -93,16 +113,15 @@ def submit():
         "submission_id": submission_id,
         "creator_id": creator_id,
         "text_hash": text_hash,
-        "signals_used": ["stylometric"],
-        "signal_scores": {
-            "sentence_regularity_score": stylo["sentence_regularity_score"],
-            "em_dash_score": stylo["em_dash_score"],
-            "discourse_marker_score": stylo["discourse_marker_score"],
-            "stylometric_score": stylometric_score,
+        "signals_used": ["stylometric", "semantic_llm", "pragmatic_llm"],
+        "signal_scores": score_breakdown,
+        "signal_rationales": {
+            "semantic_rationale": semantic["semantic_rationale"],
+            "pragmatic_rationale": pragmatic["pragmatic_rationale"],
         },
-        "combined_ai_score": stylometric_score,
-        "confidence_score": confidence_score,
-        "attribution_result": attribution_result,
+        "combined_ai_score": combined_ai_score,
+        "confidence_score": confidence,
+        "attribution_result": attribution,
         "transparency_label": transparency_label,
         "status": "classified",
         "created_at": created_at,
@@ -111,17 +130,13 @@ def submit():
 
     return jsonify({
         "submission_id": submission_id,
-        "attribution_result": attribution_result,
-        "confidence_score": confidence_score,
+        "attribution_result": attribution,
+        "confidence_score": confidence,
         "transparency_label": transparency_label,
-        "score_breakdown": {
-            "sentence_cv": stylo["sentence_cv"],
-            "sentence_regularity_score": stylo["sentence_regularity_score"],
-            "em_dash_ratio": stylo["em_dash_ratio"],
-            "em_dash_score": stylo["em_dash_score"],
-            "discourse_marker_density": stylo["discourse_marker_density"],
-            "discourse_marker_score": stylo["discourse_marker_score"],
-            "stylometric_score": stylometric_score,
+        "score_breakdown": score_breakdown,
+        "signal_rationales": {
+            "semantic_rationale": semantic["semantic_rationale"],
+            "pragmatic_rationale": pragmatic["pragmatic_rationale"],
         },
         "status": "classified",
     }), 200
