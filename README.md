@@ -1,6 +1,6 @@
 # Provenance Guard
 
-![AI and human authorship](https://citl.news.niu.edu/wp-content/uploads/sites/14/2024/12/iStock-1760687083-800x500.jpg)
+![AI and human authorship](assets/banner.jpg)
 
 A backend attribution-transparency system for creative-writing platforms. It accepts a
 text submission, runs multiple detection signals, returns a **confidence-scored** AI-likeness
