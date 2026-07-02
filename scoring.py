@@ -33,3 +33,21 @@ def attribution_result(combined_ai_score):
     if combined_ai_score >= 0.75:
         return "likely_ai"
     return "uncertain"
+
+
+def label_variant(attribution, confidence):
+    """Select which transparency label to show, gated on confidence.
+
+    likely_human + confidence >= 0.60 -> high-confidence human label
+    likely_ai    + confidence >= 0.60 -> high-confidence AI label
+    all other cases                   -> uncertain label
+
+    This means a borderline result (attribution near a threshold but low
+    confidence) shows the cautious uncertain label rather than an
+    overconfident accusation.
+    """
+    if attribution == "likely_human" and confidence >= 0.60:
+        return "likely_human"
+    if attribution == "likely_ai" and confidence >= 0.60:
+        return "likely_ai"
+    return "uncertain"
